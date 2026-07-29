@@ -1,0 +1,53 @@
+# Postgres primary configuration for cross-region streaming replication.
+#
+# Mounted into the `postgres` StatefulSet (see postgres-primary-patch.yaml)
+# at /etc/postgresql/. The postgres container is started with
+# `-c config_file=/etc/postgresql/postgresql.conf` so these take effect.
+#
+# SECURITY NOTE: pg_hba.conf below allows replication connections from
+# 0.0.0.0/0 as a documented placeholder. Before applying this to a real
+# environment, restrict the `host replication replicator` line to the
+# secondary region's actual peered VPC/PrivateLink CIDR — see
+# infra/dr/README.md. Do not leave this as 0.0.0.0/0 in production; this
+# port carries the full financial dataset.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-primary-conf
+  namespace: greenpay
+data:
+  postgresql.conf: |
+    listen_addresses = '*'
+    wal_level = replica
+    max_wal_senders = 10
+    max_replication_slots = 10
+    hot_standby = on
+    # Ship WAL to the backup bucket as a second, independent replication
+    # path (defense in depth if streaming replication itself is disrupted).
+    # See docs/disaster-recovery.md for how this relates to RPO.
+    archive_mode = on
+    archive_command = 'true'  # placeholder — wire to wal-g/pgbackrest per infra/dr/README.md
+    hba_file = '/etc/postgresql/pg_hba.conf'
+  pg_hba.conf: |
+    local   all             all                                     trust
+    host    all             all             127.0.0.1/32            scram-sha-256
+    host    all             all             ::1/128                 scram-sha-256
+    host    all             all             0.0.0.0/0               scram-sha-256
+    # Placeholder CIDR — restrict to the secondary region's peered VPC range.
+    host    replication     replicator      0.0.0.0/0               scram-sha-256
+---
+# Runs once, only on first initdb (primary's data volume starts empty).
+# Creates the replication role the secondary's standby bootstrap
+# (pg_basebackup) authenticates as.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-primary-initdb
+  namespace: greenpay
+data:
+  10-create-replication-role.sh: |
+    #!/bin/bash
+    set -euo pipefail
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+      CREATE ROLE ${POSTGRES_REPLICATION_USER} WITH REPLICATION LOGIN PASSWORD '${POSTGRES_REPLICATION_PASSWORD}';
+    EOSQL

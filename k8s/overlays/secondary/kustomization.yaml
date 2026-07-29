@@ -1,0 +1,36 @@
+# Secondary-region overlay. Apply with:
+#   kubectl apply -k k8s/overlays/secondary
+#
+# Composes the single-cluster base (k8s/base/) and layers on:
+#   - Postgres configured to bootstrap as a physical streaming-replication
+#     standby of the primary region (postgres-standby-patch.yaml).
+#   - dr-controller: the automated-failover watcher that promotes this
+#     standby once the primary is confirmed down (dr-controller.yaml).
+#   - greenpay-dr-secrets (replication credentials + primary endpoints).
+#
+# Backend/frontend run at the same replica count as primary (warm standby)
+# specifically so RTO is "promote DB + shift DNS", not "cold-start pods
+# too". See docs/disaster-recovery.md for the RTO/RPO targets this
+# topology is designed against, and
+# docs/runbooks/dr-failover.md for the operational procedure.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: greenpay
+
+resources:
+  - ../../base
+  - dr-secrets.yaml
+  - dr-controller.yaml
+
+patches:
+  - path: postgres-standby-patch.yaml
+
+configMapGenerator:
+  - name: dr-controller-script
+    files:
+      - dr-controller-entrypoint.sh
+
+commonAnnotations:
+  dr.greenpay.io/region: secondary-region
+  dr.greenpay.io/cluster-role: standby

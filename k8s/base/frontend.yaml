@@ -5,15 +5,18 @@ metadata:
   namespace: greenpay
   labels:
     app: frontend
+    color: blue
 spec:
   replicas: 2
   selector:
     matchLabels:
       app: frontend
+      color: blue
   template:
     metadata:
       labels:
         app: frontend
+        color: blue
     spec:
       containers:
         - name: frontend
@@ -38,6 +41,8 @@ spec:
               cpu: "500m"
               memory: "512Mi"
 ---
+# Stable Service: see backend.yaml for how selector.color is used as the
+# blue/green cutover switch by scripts/blue-green-deploy.sh.
 apiVersion: v1
 kind: Service
 metadata:
@@ -46,6 +51,33 @@ metadata:
 spec:
   selector:
     app: frontend
+    color: blue
+  ports:
+    - port: 3000
+      targetPort: 3000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-svc-blue
+  namespace: greenpay
+spec:
+  selector:
+    app: frontend
+    color: blue
+  ports:
+    - port: 3000
+      targetPort: 3000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-svc-green
+  namespace: greenpay
+spec:
+  selector:
+    app: frontend
+    color: green
   ports:
     - port: 3000
       targetPort: 3000

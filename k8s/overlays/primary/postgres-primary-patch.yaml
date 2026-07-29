@@ -1,0 +1,40 @@
+# Strategic-merge patch applied on top of k8s/postgres.yaml's StatefulSet in
+# the primary-region overlay: adds the replication role/config needed so the
+# secondary region can stream from this instance. See
+# postgres-replication-configmaps.yaml and postgres-replication-svc.yaml.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: greenpay
+spec:
+  template:
+    spec:
+      containers:
+        - name: postgres
+          command: ["postgres"]
+          args: ["-c", "config_file=/etc/postgresql/postgresql.conf"]
+          env:
+            - name: POSTGRES_REPLICATION_USER
+              valueFrom:
+                secretKeyRef:
+                  name: greenpay-dr-secrets
+                  key: POSTGRES_REPLICATION_USER
+            - name: POSTGRES_REPLICATION_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: greenpay-dr-secrets
+                  key: POSTGRES_REPLICATION_PASSWORD
+          volumeMounts:
+            - name: postgres-primary-conf
+              mountPath: /etc/postgresql
+            - name: postgres-primary-initdb
+              mountPath: /docker-entrypoint-initdb.d
+      volumes:
+        - name: postgres-primary-conf
+          configMap:
+            name: postgres-primary-conf
+        - name: postgres-primary-initdb
+          configMap:
+            name: postgres-primary-initdb
+            defaultMode: 0755

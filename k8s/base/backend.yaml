@@ -1,0 +1,116 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: greenpay
+  labels:
+    app: backend
+    color: blue
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend
+      color: blue
+  template:
+    metadata:
+      labels:
+        app: backend
+        color: blue
+    spec:
+      # The API backend is a standard workload — use the default scheduler.
+      # Only ML pods (summary-worker, ml-inference, ml-training) opt into
+      # the greenpay-scheduler via schedulerName.
+      schedulerName: default-scheduler
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: backend
+      containers:
+        - name: backend
+          image: greenpay/backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 4000
+          envFrom:
+            - configMapRef:
+                name: greenpay-config
+            - secretRef:
+                name: greenpay-secrets
+          # Liveness: process is up. Does not touch the database, so a slow
+          # or unreachable DB never causes a restart loop.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 4000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          # Readiness: deep check (see backend/src/routes/health.js) that
+          # verifies the database is reachable. This is what gates traffic —
+          # both the in-cluster Service and the blue/green smoke-test step
+          # (scripts/blue-green-deploy.sh) depend on this being DB-aware, not
+          # just "process is alive".
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 4000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+---
+# Stable Service: this is what the Ingress and all in-cluster clients target.
+# selector.color is the blue/green cutover switch — scripts/blue-green-deploy.sh
+# flips it between "blue" and "green" after the new color passes smoke tests
+# (see docs/disaster-recovery.md and docs/runbooks/dr-failover.md). Never
+# edit selector.color by hand outside that script/rollback path.
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-svc
+  namespace: greenpay
+spec:
+  selector:
+    app: backend
+    color: blue
+  ports:
+    - port: 4000
+      targetPort: 4000
+---
+# Fixed, always-present per-color Services. These exist purely so the
+# blue/green pipeline can run smoke tests directly against the *new* color
+# before it receives any production traffic via backend-svc above.
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-svc-blue
+  namespace: greenpay
+spec:
+  selector:
+    app: backend
+    color: blue
+  ports:
+    - port: 4000
+      targetPort: 4000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-svc-green
+  namespace: greenpay
+spec:
+  selector:
+    app: backend
+    color: green
+  ports:
+    - port: 4000
+      targetPort: 4000

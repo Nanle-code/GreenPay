@@ -1,0 +1,63 @@
+# Strategic-merge patch applied on top of k8s/postgres.yaml's StatefulSet in
+# the secondary-region overlay: adds an initContainer that bootstraps this
+# Postgres instance as a physical streaming-replication standby of the
+# primary region, the first time the volume is empty.
+#
+# After pg_basebackup runs with -R, Postgres's own data directory contains
+# standby.signal + postgresql.auto.conf (primary_conninfo). The main
+# `postgres` container is otherwise unmodified — the stock entrypoint
+# detects an already-initialized data directory and starts normally in
+# standby/recovery mode, so no override of its command/args is needed here
+# (unlike the primary, which needs custom postgresql.conf/pg_hba.conf).
+#
+# Promotion out of standby mode is handled by the dr-controller Deployment
+# (dr-controller.yaml) via `SELECT pg_promote();`, not by anything in this
+# file — this patch only concerns initial bootstrap.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: greenpay
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: standby-bootstrap
+          image: postgres:16-alpine
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data
+            - name: PRIMARY_POSTGRES_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: greenpay-dr-secrets
+                  key: PRIMARY_POSTGRES_HOST
+            - name: POSTGRES_REPLICATION_USER
+              valueFrom:
+                secretKeyRef:
+                  name: greenpay-dr-secrets
+                  key: POSTGRES_REPLICATION_USER
+            - name: POSTGRES_REPLICATION_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: greenpay-dr-secrets
+                  key: POSTGRES_REPLICATION_PASSWORD
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              if [ -s "$PGDATA/PG_VERSION" ]; then
+                echo "PGDATA already initialized — skipping pg_basebackup (standby already bootstrapped, or promoted)"
+                exit 0
+              fi
+              echo "Bootstrapping standby from primary ($PRIMARY_POSTGRES_HOST) via pg_basebackup..."
+              PGPASSWORD="$POSTGRES_REPLICATION_PASSWORD" pg_basebackup \
+                -h "$PRIMARY_POSTGRES_HOST" -p 5432 \
+                -D "$PGDATA" \
+                -U "$POSTGRES_REPLICATION_USER" \
+                -Fp -Xs -P -R
+              echo "Standby bootstrap complete."
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data

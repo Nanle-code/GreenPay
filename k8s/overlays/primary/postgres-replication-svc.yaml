@@ -1,0 +1,23 @@
+# Dedicated Service for cross-region streaming replication traffic, kept
+# separate from the in-cluster headless postgres-svc (k8s/postgres.yaml).
+#
+# This MUST resolve from the secondary region (via VPC peering / PrivateLink
+# / Transit Gateway — see infra/dr/README.md) but MUST NOT be reachable from
+# the public internet: it is a raw Postgres port carrying the full financial
+# dataset. The annotation below is the AWS-internal-NLB example; swap for
+# your cloud's internal-LB equivalent if not on AWS.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-replication-svc
+  namespace: greenpay
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+spec:
+  type: LoadBalancer
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432

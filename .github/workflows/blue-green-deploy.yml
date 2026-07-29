@@ -1,0 +1,61 @@
+name: Blue/Green Deploy
+
+# Zero-downtime rollout of backend or frontend to one region, using
+# scripts/blue-green-deploy.sh against the existing k8s/ manifests (see
+# docs/disaster-recovery.md's "Blue/green deployment" section). Manual
+# trigger only — this is a deploy action with real production
+# consequences, not something that should run unattended on every push.
+#
+# Requires a kubeconfig secret per region (KUBECONFIG_PRIMARY /
+# KUBECONFIG_SECONDARY) with access to the greenpay namespace in that
+# region's cluster.
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: "Which Deployment to roll out"
+        required: true
+        type: choice
+        options: [backend, frontend]
+      image:
+        description: "Full image reference to deploy (e.g. greenpay/backend:v1.2.3)"
+        required: true
+        type: string
+      region:
+        description: "Which region to deploy to"
+        required: true
+        type: choice
+        options: [primary, secondary]
+
+jobs:
+  blue-green-deploy:
+    name: Blue/Green deploy ${{ inputs.service }} to ${{ inputs.region }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.region }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure kubeconfig
+        env:
+          KUBECONFIG_PRIMARY: ${{ secrets.KUBECONFIG_PRIMARY }}
+          KUBECONFIG_SECONDARY: ${{ secrets.KUBECONFIG_SECONDARY }}
+        run: |
+          mkdir -p "$HOME/.kube"
+          if [ "${{ inputs.region }}" = "primary" ]; then
+            echo "$KUBECONFIG_PRIMARY" | base64 -d > "$HOME/.kube/config"
+          else
+            echo "$KUBECONFIG_SECONDARY" | base64 -d > "$HOME/.kube/config"
+          fi
+
+      - name: Run blue/green deploy
+        run: |
+          chmod +x scripts/blue-green-deploy.sh scripts/smoke-test.sh
+          scripts/blue-green-deploy.sh "${{ inputs.service }}" "${{ inputs.image }}" greenpay
+
+      - name: Report failure
+        if: failure()
+        run: |
+          echo "::error::Blue/green deploy of ${{ inputs.service }} to ${{ inputs.region }} failed or was rolled back automatically. See job logs for the smoke-test output that triggered it, and docs/runbooks/dr-failover.md if this coincides with a regional incident rather than a bad release."

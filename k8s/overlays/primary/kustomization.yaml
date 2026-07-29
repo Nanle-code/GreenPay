@@ -1,0 +1,31 @@
+# Primary-region overlay. Apply with:
+#   kubectl apply -k k8s/overlays/primary
+#
+# Composes the single-cluster base (k8s/base/) and layers on:
+#   - Postgres configured as the replication primary (WAL streaming to the
+#     secondary region + a placeholder WAL-archive hook to object storage).
+#   - A dedicated, internal-only Service exposing the replication port to
+#     the peered secondary-region network.
+#   - greenpay-dr-secrets (replication credentials) — see ../secondary for
+#     the standby side, and infra/dr/README.md for how these are meant to
+#     be sourced from a real secret manager rather than committed here.
+#
+# See docs/disaster-recovery.md for the full topology and
+# docs/runbooks/dr-failover.md for operational procedures.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: greenpay
+
+resources:
+  - ../../base
+  - dr-secrets.yaml
+  - postgres-replication-configmaps.yaml
+  - postgres-replication-svc.yaml
+
+patches:
+  - path: postgres-primary-patch.yaml
+
+commonAnnotations:
+  dr.greenpay.io/region: primary-region
+  dr.greenpay.io/cluster-role: active

@@ -1,0 +1,75 @@
+# The automated half of failover: watches the primary region directly and
+# promotes this region's Postgres standby when it's confirmed down. See
+# dr-controller-entrypoint.sh (this directory) for the control loop and
+# docs/disaster-recovery.md / docs/runbooks/dr-failover.md for the design
+# and operational procedure this implements.
+#
+# Single replica by design: this issues an irreversible action
+# (pg_promote()) and must not race itself. If this pod restarts mid-outage,
+# the new instance re-derives state safely — pg_is_in_recovery() is checked
+# before every promotion attempt, so a restart never double-promotes.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dr-controller
+  namespace: greenpay
+  labels:
+    app: dr-controller
+    app.kubernetes.io/component: disaster-recovery
+    app.kubernetes.io/part-of: greenpay
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: dr-controller
+  template:
+    metadata:
+      labels:
+        app: dr-controller
+    spec:
+      containers:
+        - name: dr-controller
+          image: postgres:16-alpine
+          command: ["/bin/sh", "/scripts/dr-controller-entrypoint.sh"]
+          env:
+            - name: PRIMARY_HEALTH_URL
+              valueFrom:
+                secretKeyRef:
+                  name: greenpay-dr-secrets
+                  key: PRIMARY_HEALTH_URL
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: greenpay-secrets
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: greenpay-secrets
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: greenpay-secrets
+                  key: POSTGRES_DB
+            - name: POLL_INTERVAL_SECONDS
+              value: "5"
+            - name: FAILURE_THRESHOLD
+              value: "6"
+          volumeMounts:
+            - name: dr-controller-script
+              mountPath: /scripts
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "32Mi"
+            limits:
+              cpu: "200m"
+              memory: "64Mi"
+      volumes:
+        - name: dr-controller-script
+          configMap:
+            name: dr-controller-script
+            defaultMode: 0755

@@ -128,7 +128,7 @@ Apply these labels to your nodes with `kubectl label node <name> <key>=<value>`.
 | `greenpay.io/network-bandwidth` | Integer string (Gbps) | `100` |
 | `greenpay.io/node-tier` | `gpu-high`, `gpu-low`, `cpu-high`, `cpu-standard` | `gpu-high` |
 
-See `k8s/ml-workloads/node-labels.yaml` for full example commands.
+See `k8s/base/ml-workloads/node-labels.yaml` for full example commands.
 
 ---
 
@@ -192,8 +192,12 @@ kubectl get pods -n greenpay-scheduler
 ### 4. Deploy ML workloads
 
 ```bash
-kubectl apply -k k8s/
+kubectl apply -k k8s/base/
 ```
+
+For a multi-cluster disaster-recovery deployment, apply
+`k8s/overlays/primary/` or `k8s/overlays/secondary/` instead — see
+[docs/disaster-recovery.md](disaster-recovery.md).
 
 ### 5. Verify scheduling decisions
 
